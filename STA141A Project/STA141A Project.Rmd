@@ -1,0 +1,1315 @@
+---
+title: "STA141A Project"
+author: "Marvin Lau 917177178"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(gridExtra)
+opts_chunk$set(echo = FALSE)
+setwd("C:/Users/marvi/OneDrive/Desktop/STA141A Project")
+```
+
+```{r}
+
+session=list()
+data_frames <- list()
+big_frame <- data.frame()
+
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+  
+  #print(session[[i]]$mouse_name)
+  #print(session[[i]]$date_exp)
+  #print(nrow(session[[i]]$spks[[1]]))
+
+  
+  avg_spikes_per_trial <- c()
+  for (x in 1:length(session[[i]]$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(session[[i]]$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+  
+
+  data_frames[[i]] <- data.frame(
+    feedback_type = session[[i]]$feedback_type,
+    contrast_left = session[[i]]$contrast_left,
+    contrast_right = session[[i]]$contrast_right,
+    mouse_name = rep(session[[i]]$mouse_name, length(session[[i]]$feedback_type)),
+    session = rep(i, length(session[[i]]$feedback_type)),
+    num_neurons = rep(length(session[[i]]$brain_area), length(session[[i]]$feedback_type)),
+    brain_areas = rep(length(unique(session[[i]]$brain_area)), length(session[[i]]$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(session[[i]]$feedback_type))
+    #date_exp = rep(session[[i]]$date_exp, length(session[[i]]$feedback_type))
+  )
+  
+  big_frame <- rbind(big_frame, data_frames[[i]])
+  
+}
+# data_frames[[2]]
+```
+
+```{r}
+name <- c()
+date <- c()
+num_brain_areas <- c()
+num_neuron <- c()
+trials <- c()
+successes <- c()
+failures <- c()
+
+categorize_feedback <- function(contrast_left, contrast_right) {
+  if (contrast_left > contrast_right) {
+    return("Right")
+  } else if (contrast_right > contrast_left) {
+    return("Left")
+  } else if (contrast_left == 0 && contrast_right == 0) {
+    return("Still")
+  } else {
+    return("50/50")
+  }
+}
+
+for(i in 1:18 ){
+  name <- c(name, session[[i]]$mouse_name)
+  date <- c(date, session[[i]]$date_exp)
+  num_brain_areas <- c(num_brain_areas, length(unique(session[[i]]$brain_area)))
+  num_neuron <- c(num_neuron, nrow(session[[i]]$spks[[1]]))
+  trials <- c(trials, length(session[[i]]$feedback_type))
+  successes <- c(successes, sum(session[[i]]$feedback_type == 1))
+  failures <- c(failures, sum(session[[i]]$feedback_type == -1))
+}
+
+info_frame <- data.frame(name, date, num_brain_areas, num_neuron, trials, successes, failures)
+
+info_frame <- info_frame %>% mutate(ratio_success = successes/trials)
+
+```
+
+```{r, message=FALSE}
+
+# returns tibble containing average spikes by brain area
+brain_spike <- function(num_session, trial){
+  neuron_spikes <- apply(session[[num_session]]$spks[[trial]], MARGIN = 1, FUN = sum)
+  brain_frame <- data.frame(brain = session[[num_session]]$brain_area, spikes = neuron_spikes)
+  avg_spike_brain_area <- brain_frame %>% group_by(brain) %>% summarise(avg_spike = mean(spikes))
+  return(avg_spike_brain_area)
+}
+
+
+# returns df with columns for each brain area measured with contrast, feedback type, stimulus type, and trial num
+create_info_trials <- function(num_session){
+    
+  info_trials <- data.frame()
+  stimulus_type <-c()
+  
+  for(i in 1:length(session[[num_session]]$feedback_type)){
+    
+    info_trials <- rbind(info_trials, brain_spike(num_session, i)$avg_spike)
+    
+    left <- session[[num_session]]$contrast_left[i]
+    right <- session[[num_session]]$contrast_right[i] 
+    stimulus_type <-c(stimulus_type, categorize_feedback(left, right))
+    
+  }
+  
+  info_trials <- info_trials %>% cbind(session[[num_session]]$contrast_left) %>%
+    cbind(session[[num_session]]$contrast_right) %>%
+    cbind(session[[num_session]]$feedback_type) %>%
+    cbind(stimulus_type) %>%
+    cbind(1:length(session[[num_session]]$feedback_type))
+    
+  colnames(info_trials) <- c(brain_spike(num_session, 1)$brain, "contrast_left", 
+                            "contrast_right", "feedback_type", "stimulus_type", "trial_num")
+  return(info_trials)
+}
+
+
+# kable(create_info_trials(4), format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+```{r warning=FALSE, message=FALSE, result = 'hide', fig.height = 4, fig.width = 5, fig.align = "center"}
+library(ggformula)
+
+# plots neuron spikes by trial using info_trial
+plot_session <- function(num_session){
+  
+  info_trials <- create_info_trials(num_session)
+  
+  info_trials_long <- info_trials %>%
+    pivot_longer(cols = contains(brain_spike(num_session, 1)$brain), names_to = "Brain_Area", values_to = "y")
+
+  info_trials_plot <- ggplot(info_trials_long) + 
+    geom_line(aes(x = trial_num, y = y, color = Brain_Area)) +
+    geom_spline(aes(x = trial_num, y = y, color = Brain_Area), linewidth = 1) +
+    labs(x = "Trials", y = "Neuron Spikes", title = paste("Neuron spikes by brain area in Session", 
+                                                         num_session, paste0("(", info_frame$name[num_session], ")")))
+
+  print(info_trials_plot)
+}
+
+
+
+```
+
+```{r}
+# Function that plots neuron activity in individual trials (Taken from discussion, slightly modified)
+plot_trial <- function(num_session, num_trial){
+  i.t = num_trial
+  this_session = session[[num_session]]
+  n.area = length(unique(session[[num_session]]$brain_area))
+  area.col = rainbow(n=n.area,alpha=0.7)
+  area = c(brain_spike(num_session, num_trial)$brain)
+  
+  spks=this_session$spks[[i.t]];
+  n.neuron=dim(spks)[1]
+  time.points=this_session$time[[i.t]]
+    
+    plot(0,0,xlim=c(min(time.points),max(time.points)),ylim=c(0,n.neuron+1),col='white', xlab='Time (s)',yaxt='n', ylab='Neuron', main=paste('Session', num_session, 'Trial ',i.t, 'feedback', this_session$feedback_type[i.t] ),cex.lab=1.5)
+    for(i in 1:n.neuron){
+        i.a=which(area== this_session$brain_area[i]);
+        col.this=area.col[i.a]
+        
+        ids.spike=which(spks[i,]>0) # find out when there are spikes 
+        if( length(ids.spike)>0 ){
+            points(x=time.points[ids.spike],y=rep(i, length(ids.spike) ),pch='.',cex=2, col=col.this)
+        }
+      
+            
+    }
+    
+legend("topright", 
+  legend = area, 
+  col = area.col, 
+  pch = 16, 
+  cex = 0.8
+  )
+}
+
+```
+
+# Abstract
+
+This report presents a predictive modeling project using data from an experiment conducted by Steinmetz et al. (2019) on mice. The goal was to predict the type of feedback based on visual stimulus and neuron activity. The study involved 10 mice, 39 sessions, and 9,538 trials. Key variables included the mouse's name, experiment date, brain areas measured, number of neurons, trials conducted, successes and failures, and the success-to-trial ratio.
+
+Three predictive models were employed, including Logistic Regression, Decision Tree Classification, and Support Vector Machine (SVM) Classification. By analyzing the variables 'contrast_left', 'contrast_right', and 'avg_spikes_per_neuron', the models achieved a misclassification rate of approximately 0.25-0.3. However, integrating the data into 'avg_spikes_per_neuron' resulted in the loss of specific information about brain areas, spike timing, and individual neurons firing during sessions.
+
+The predictive models showed higher accuracy when the training and test sets included the same mouse. Adjusting the training set to match the mouse in the test set significantly improved accuracy. When combining neural activity from the same mouse with screen contrast levels, the models achieved 70-80% accuracy in predicting mouse behavior. Further research utilizing alternative data integration methods, such as clustering or PCA, is recommended to enhance predictive model accuracy. Understanding the relationship between neuron activity, visual stimulus, and mouse behavior can provide insights into both mouse and human brain functioning.
+
+# Section 1: Introduction
+
+The goal of this project is to build a predictive model that can predict the type of feedback given by mice based off of the visual stimulus (Left/Right contrast) presented and the neuron activity in the mice. "Neuron Activity" in the context of this project is defined as the spikes in neurons as the stimulus is presented. The data was taken from an article titled "Distributed coding of choice, action and engagement across the mouse brain" written by Nicholas A. Steinmetz, Peter Zatka-Haas, Matteo Carandini and Kenneth D. Harris. 
+
+The key variables used are:
+
+-   "name" (name of the mouse recorded during session)
+-   "date" (date of the experiment)
+-   "num_brain_areas" (number of unique brain areas measured by session)
+-   "num_neuron" (number of neurons measured by session)
+-   "trials" (number of trials conducted by session)
+-   "successes" (number of successes in trials)
+-   "failures" (number of failures in trials)
+-   "ratio_success" (ratio of successes to number of trials)
+
+We hope to find a connection between how the neurons spike, the contrast between screens, and how the mouse reacts in order to find out more about how the brain works in mice, possibly leading to discoveries in how the human brain functions. A possible conclusion is that there are areas of the brain that recognize large differences in color/brightness, allowing the mice who use this area more to have a greater rate of success.
+
+### Background
+
+Steinmetz et al. (2019) conducted experiment involving 10 mice over 39 sessions, totaling 9538 trials. Each session involved measuring the neuron activity of one mouse at a time over the course of multiple trials. Trials involved two screens positioned in front of the mouse, offset left and right, where visual stimuli was presented with varying contrast levels (0, 0.25, 0.5, 1), with 0 indicating no stimulus. The mice then had to turn a wheel left, right, or not at all depending on the contrast difference in the screens and were given a reward or penalty as feedback. Specifically:
+
+-   If the left contrast was greater than the right contrast, success (1) was achieved by turning the wheel to the right, otherwise it was considered a failure (-1).
+
+-   If the right contrast was greater than the left contrast, success (1) was achieved by turning the wheel to the left, otherwise it was considered a failure (-1).
+
+-   If both left and right contrasts were zero, success (1) was achieved by holding the wheel still, otherwise it was considered a failure (-1).
+
+-   If both left and right contrasts were equal and non-zero, the correct choice (50%) was randomly determined as either left or right.
+
+During these trials, the mice wore Neuropixels probes that measured neuron activity in different parts of the brain in the form of spike trains. These spike trains were measured for 0.4 seconds after stimulus was presented. This project uses only 18 of the 39 sessions and only 4 of the 10 mice. It is worth mentioning that there were no N/A values.
+
+In the article by Steinmetz et al. (2019), they were able to successfully map out the brain and find what parts of the brain (from the responses of the neurons) were relevant in the behavior of the mice in the experiments.
+
+```{r}
+# Code to format taken from disc 10
+kable(info_frame, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+<p style="text-align: center;">**Table 1**. i. Data structure across the 18 sessions.</p>
+
+# Section 2: Exploratory data analysis
+
+```{r}
+plot_session(1)
+```
+
+<p style="text-align: center;">**Figure 1**. Neural activity across trials in Cori's first session.</p>
+
+ii. In the plot above (**Figure 1**), we can see that the average spikes in neural activity are very consistent across the session and have a general downward trend, with the slight exception of the CA3 area of the brain. The success rate for this session was 0.61.
+
+```{r}
+s <- 16
+par(bg = 'gray',mfrow=c(1,2))
+plot_trial(s,1)
+plot_trial(s,5)
+par(bg = 'gray',mfrow=c(1,2))
+plot_trial(s,9)
+plot_trial(s,10)
+```
+
+<p style="text-align: center;">**Figure 2**. Neural activity during two trials in Session 16. Session
+16 was chosen because the session contained a different mouse and was not Lederberg's
+first session.</p>
+
+iii. Looking at the neural activity in these four trials, there seems to be a pattern where there are more neuron spikes in the first 0.1-0.2 seconds. The SSs and TH areas of the brain also seem to be more active in the instances where the mice were correct (feedback = 1). 
+
+```{r}
+
+ggplot(info_frame, aes(x = name, y = num_brain_areas, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Number of Brain Areas", title = "3a. Number of Brain Areas by Mice")
+
+ggplot(info_frame, aes(x = name, y = num_neuron, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Number of Neurons", title = "3b. Number of Neurons by Mice")
+
+ggplot(info_frame, aes(x = name, y = ratio_success, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Ratio of Success", title = "3c. Success Rate by Mice") 
+
+```
+<p style="text-align: center;">**Figure 3**. Box plots displaying three variables across all 18 sessions, separated by mice.</p>
+
+iv. In *Figure 3a*, we can see that of the four mice, 'Hench' has the greatest number of brain areas measured on average. However, 'Hench' did not have the greatest average number of neurons measured nor the greatest mean success rate, shown in *Figure 3b* and *Figure 3c*. A notable observation is that 'Lederberg' has not only the highest average success rate, but also the highest success rate in an individual session. 'Lederberg' has nearly the lowest average number of neurons, as well as being second in terms of average brain area. Both of these observations imply that success rate is not directly tied to the number of brain areas nor the number of neurons.
+
+
+
+# Section 3: Data integration
+
+For this step, I created a data frame that contains every trial, as well as some variables. The data frame is a 5081 by 9 data frame. The 5081 rows represent the total number trials in the data set. The nine columns display nine variables measured every trial, specifically:  
+
+-   "feedback_type" (result of trial, "1" for success and "-1" for failure)  
+-   "contrast_left" (contrast level of the screen on the level, with values of [0, 0.25, 0.5, 1])  
+-   "contrast_right" (contrast level of the screen on the right, with values of [0, 0.25, 0.5, 1])  
+-   "mouse_name" (name of the mouse recorded [Cori, Forssmann, Hench, Lederberg])  
+-   "session" (the session number [1 to 18])  
+-   "num_neurons" (number of neurons measured by trial)  
+-   "brain_areas" (number of brain areas measured by trial)  
+-   "avg_spikes_per_neuron" (average number of spikes per neuron per trial)  
+-   "trail_num_per_session" (trial number within session)  
+
+
+The largest issue with combining the data as it was given was that the spikes matrix had a varying number of neurons measured for spikes and 40 time bins for each trial. I decided to simplify the data by averaging the spikes per neuron, in order to be able to be able to track a common variable across trials, sessions and mice.
+
+Other variables were much easier to combine, as "feedback_type", "contrast_left", "contrast_right", "mouse_name", "session", and "trail_num_per_session" were added to the data frame as is. "num_neurons" was calculated by taking the number of rows in the "spks" matrices and "brain_areas" was calculated by finding the number of unique values in "brain_area" character vector in the original data.
+
+# Section 4: Predictive modeling
+I chose to test using three different predictive modeling methods: Logistic Regression, Decision Tree Classification, and Support Vector Machine (SVM). I wanted to use three different methods so that I could compare which one would work better on this data set. I also used a set seed to make the results reproducible.
+
+Logistic Regression was chosen because of the ease of implementation and its use as a baseline. The outcome variable also only has two categories, success and failure, which makes Logistic Regression much more appropriate.
+
+Decision Tree Classification was chosen because of how easy it is to interpret and its greater flexibility than Logistic Regression. However, this method can lead to overfitting, causing worse performance on new data.
+
+SVM was chosen because it is also more versatile than Logistic Regression, but also is less prone to overfitting compared to the other two modeling methods. A drawback of SVM is the computational cost of running this model, but that thankfully is not an issue with our relatively small dataset.
+
+
+# Section 5: Prediction performance on the test sets
+
+
+```{r}
+library(caTools)
+library(rpart)
+
+set.seed(917177178)
+dataset = big_frame[c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm = table(test_set[, 1], y_pred)
+print(cm)
+misclassification_rate <- 1 - sum(diag(cm) / sum(cm))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+
+```
+<p style="text-align: center;">**Table 2**. Confusion Matrix from Logistic Regression</p>
+
+The misclassification rate of performing Logistic Regression on the training set split from the data frame containing all sessions/trials was ``r misclassification_rate``. The F1 value was ``r f1``, showing that the model was pretty effective in predicting the 'feedback_value'. I chose to use the F1 value as it takes into account both false negatives and false positives.
+
+```{r}
+dataset = big_frame[c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+```
+<p style="text-align: center;">**Table 3**. Confusion Matrix from Decision Tree Classification, trained on data frame with all sessions</p>
+
+The misclassification rate of performing Decision Tree Classification on the training set split from the data frame containing all sessions/trials was ``r misclassification_rate1``. However, if we look at the confusion matrix, we can see that the model seems to be heavily biased towards creating false positives and predicted that all 'feedback_types' would be '1', despite having a similar misclassification rate as the Logistic Regression model. Therefore, I decided to rerun the model on a smaller data set, just the data from Session 1.
+
+```{r}
+set.seed(917177178)
+# Decision Tree Classification
+dataset = data_frames[[2]][c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+plot(classifier1)
+text(classifier1)
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+```
+<p style="text-align: center;">**Table 4 and Figure 4**. Table shows Confusion Matrix for Decision Tree Classification on smaller training set (Session 2). Figure 4 is a Decision Tree diagram showing how the predictions were made.</p>  
+
+The misclassification rate this time using a smaller dataset was ``r misclassification_rate1``. The F1 value was ``r f11``, showing that the model was also effective in predicting the 'feedback_value', if slightly worse. We can also see how the decision tree made its choices from the **Figure 4**. 
+
+```{r}
+library(e1071)
+set.seed(917177178)
+
+# Support Vector Machine (SVM) Classification
+dataset = data_frames[[2]][c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier2 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate2 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f111 <- 2 * precision * recall / (precision + recall)
+
+```
+<p style="text-align: center;">**Table 5**. Confusion Matrix using Support Vector Machine (SVM) Classification. </p>
+
+
+The misclassification rate using SVM Classification on the larger frame led to the same issue I ran into when using Decision Tree Classification (exact same results), so I again decided to use Session 2 data instead. The misclassification rate when run with Session 2 data was ``r misclassification_rate2``. The F1 value was ``r f111``, showing that the model was very similar in predicting the 'feedback_value' when compared with Logistic Regression and Decision Tree Classification. 
+
+### Testing models with given test sets
+```{r}
+read_test_data1 = readRDS('./Data/test1.rds')
+read_test_data2 = readRDS('./Data/test2.rds')
+
+avg_spikes_per_trial <- c()
+  for (x in 1:length(read_test_data1$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(read_test_data1$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+
+test_data1 <- data.frame(
+    feedback_type = read_test_data1$feedback_type,
+    contrast_left = read_test_data1$contrast_left,
+    contrast_right = read_test_data1$contrast_right,
+    mouse_name = rep(read_test_data1$mouse_name, length(read_test_data1$feedback_type)),
+    session = rep(1, length(read_test_data1$feedback_type)),
+    num_neurons = rep(length(read_test_data1$brain_area), length(read_test_data1$feedback_type)),
+    brain_areas = rep(length(unique(read_test_data1$brain_area)), length(read_test_data1$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(read_test_data1$feedback_type))
+
+  )
+
+avg_spikes_per_trial <- c()
+  for (x in 1:length(read_test_data2$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(read_test_data2$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+
+test_data2 <- data.frame(
+    feedback_type = read_test_data2$feedback_type,
+    contrast_left = read_test_data2$contrast_left,
+    contrast_right = read_test_data2$contrast_right,
+    mouse_name = rep(read_test_data2$mouse_name, length(read_test_data2$feedback_type)),
+    session = rep(18, length(read_test_data2$feedback_type)),
+    num_neurons = rep(length(read_test_data2$brain_area), length(read_test_data2$feedback_type)),
+    brain_areas = rep(length(unique(read_test_data2$brain_area)), length(read_test_data2$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(read_test_data2$feedback_type))
+
+  )
+
+```
+
+
+```{r}
+library(gridExtra)
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+test_set = test_data1[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm = table(test_set[, 1], y_pred)
+
+misclassification_rate <- 1 - sum(diag(cm) / sum(cm))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+# Test set 2
+test_set = test_data2[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+
+
+# Test Set 2 but with different training set
+training_set = data_frames[[16]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm2) / sum(cm2))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f111 <- 2 * precision * recall / (precision + recall)
+
+
+
+grid.arrange(tableGrob(cm), tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 3)
+
+```
+<p style="text-align: center;">**Table 6**. Confusion Matrices using Logistic Regression. The left table is the results with Test Set 1, while the center table is Test Set 2 with training set taken from Session 2. The right table is the new result when using Session 16 instead of Session 2.</p>  
+
+
+The first misclassification rate using when larger frame that contains all sessions again created the issue of predicting all 'feedback_type' = 1, so I opted to stick with using Session 2 data as the training set. The misclassification rate was ``r misclassification_rate`` and the F1 value was ``r f1``, showing that the predictive model performed slightly better than in the previous trials. 
+
+However running the same model with the same training data (Session 2) results in a misclassification rate of ``r misclassification_rate1`` and an f1 value of ``r f11`` when attempting to predict the second test set. Initially I was surprised that the prediction model was so far off (very large misclassification rate and low F1), but then I remembered that the data for Test Set 2 was taken from Session 18, which was a different mouse than the mouse in Session 2 (Cori).
+
+I reran the Logistic Regression with a session that involved the same mouse (Lederberg, Session 16) as the one in Session 18 and got a misclassification rate of ``r misclassification_rate2`` and an f1 value of ``r f111``, which is much better result and is more similar to the results of my other trials. 
+
+```{r}
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set = test_data1[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Decision Tree Classification
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+# Test Set 2
+training_set = data_frames[[16]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+
+test_set = test_data2[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Decision Tree Classification
+classifier2 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm2) / sum(cm2))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+grid.arrange(tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 2)
+```
+<p style="text-align: center;">**Table 7**. Confusion Matrices for Decision Tree Classification. Left is Test Set 1 with training set taken from Session 2 and right is Test Set 2 with training set taken from Session 16.</p>  
+
+```{r}
+
+plot(classifier1)
+text(classifier1)
+plot(classifier2)
+text(classifier2)
+
+```
+
+<p style="text-align: center;">**Figure 5**. Decision Tree diagram showing how the predictions were made. Top is for Test Set 1 and bottom is for Test Set 2</p>  
+
+Again using Session 2 as the training set for Test Set 1 and Decision Tree Classification, the misclassification rate was ``r misclassification_rate1`` and the F1 value was ``r f1``, ever so slightly worse than the Logistic Regression model results.
+
+I also used Session 16 again for Test Set 2, due to my findings when testing Logistic Regression previously. The misclassification rate was ``r misclassification_rate2`` and the F1 value was ``r f11``. I tried using Session 2 and Session 16 as training sets for this test set, but did not find much improvement in misclassification rate. The Decision Tree Classification seems to be worse when predicting this test set (Test Set 2).
+
+```{r}
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+test_set = test_data1[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Support Vector Machine (SVM) Classification
+classifier2 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+
+# Test Set 2
+training_set = data_frames[[16]][c(1:3,8)]
+test_set = test_data2[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Support Vector Machine (SVM) Classification
+classifier3 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier3, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate3 <- 1 - sum(diag(cm2) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+grid.arrange(tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 2)
+```
+
+<p style="text-align: center;">**Table 8**. Table shows Confusion Matrices for SVM Classification.</p>  
+
+The results of SVM Classification on Test Set 1 were also very similar to the results of Logistic Regression, shown by the misclassification rate and F1 value being ``r misclassification_rate2`` and ``r f1``, respectively. However, when running SVM on Test Set 2 with the training set taken from Session 2, the misclassification rate jumped to '0.5'. Running the test again with the training set taken from Session 16 seemed to create a very strong bias for predicting a 'feedback_value' of 1. The misclassification rate is ``r misclassification_rate3`` and F1 value is ``r f11``.
+
+
+# Section 6: Discussion
+Using the variables 'contrast_left', 'contrast_right', and 'avg_spikes_per_neuron', I was able to predict the 'feedback_type' with around a 0.25-0.3 misclassification rate. In my trial runs with three different predictive models (Logistic Regression, Decision Tree Classification, and SVM Classification), I noticed no major differences in terms of results until testing with Test Set 2. The lack of differences in the predictive models not involving Test Set 2 may have been due to the nature of the data, but most likely because of the variables used. Generating the variable 'avg_spikes_per_neuron' from the 'spks' matrix did allow me to integrate all the sessions and mice, but also led to the loss of information, like what brain areas the neurons belonged to, time the spikes occurred, which specific neurons fired by session, etc.. Using different data integration methods like clustering or PCA will most likely yield better results in terms of predictive model accuracy.
+
+The difference between trying to predict the randomly sampled test sets and Test Set 1 versus Test Set 2 was that the randomly sampled test sets and Test Set 1 had the same mouse being measured in both the train and test sets. This when trying to predict Test Set 2 with the original training set. Adjusting the training set to a session that shared the same mouse as Test Set 2 made the predictive models much more accurate. 
+
+The three predictive modeling methods were fairly effective in predicting the test set, but had a major decline in accuracy when the test set and training did not involve the same mouse. However, when using neural activity measured from the same mouse combined with the level of contrasts on the screens, it is possible to predict with 70-80% accuracy how the mouse will respond in the future.
+
+
+# Acknowledgement
+Help from Professor Shizhe Chen and both TAs, Chen Qian and Wenzhuo Wu.
+
+
+# Reference
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
+# Code Appendix
+
+```{r echo = TRUE, eval=FALSE}
+
+library(tidyverse)
+library(knitr)
+library(gridExtra)
+opts_chunk$set(echo = FALSE)
+setwd("C:/Users/marvi/OneDrive/Desktop/STA141A Project")
+
+session=list()
+data_frames <- list()
+big_frame <- data.frame()
+
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+  
+  #print(session[[i]]$mouse_name)
+  #print(session[[i]]$date_exp)
+  #print(nrow(session[[i]]$spks[[1]]))
+
+  
+  avg_spikes_per_trial <- c()
+  for (x in 1:length(session[[i]]$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(session[[i]]$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+  
+
+  data_frames[[i]] <- data.frame(
+    feedback_type = session[[i]]$feedback_type,
+    contrast_left = session[[i]]$contrast_left,
+    contrast_right = session[[i]]$contrast_right,
+    mouse_name = rep(session[[i]]$mouse_name, length(session[[i]]$feedback_type)),
+    session = rep(i, length(session[[i]]$feedback_type)),
+    num_neurons = rep(length(session[[i]]$brain_area), length(session[[i]]$feedback_type)),
+    brain_areas = rep(length(unique(session[[i]]$brain_area)), length(session[[i]]$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(session[[i]]$feedback_type))
+    #date_exp = rep(session[[i]]$date_exp, length(session[[i]]$feedback_type))
+  )
+  
+  big_frame <- rbind(big_frame, data_frames[[i]])
+  
+}
+# data_frames[[2]]
+
+name <- c()
+date <- c()
+num_brain_areas <- c()
+num_neuron <- c()
+trials <- c()
+successes <- c()
+failures <- c()
+
+categorize_feedback <- function(contrast_left, contrast_right) {
+  if (contrast_left > contrast_right) {
+    return("Right")
+  } else if (contrast_right > contrast_left) {
+    return("Left")
+  } else if (contrast_left == 0 && contrast_right == 0) {
+    return("Still")
+  } else {
+    return("50/50")
+  }
+}
+
+for(i in 1:18 ){
+  name <- c(name, session[[i]]$mouse_name)
+  date <- c(date, session[[i]]$date_exp)
+  num_brain_areas <- c(num_brain_areas, length(unique(session[[i]]$brain_area)))
+  num_neuron <- c(num_neuron, nrow(session[[i]]$spks[[1]]))
+  trials <- c(trials, length(session[[i]]$feedback_type))
+  successes <- c(successes, sum(session[[i]]$feedback_type == 1))
+  failures <- c(failures, sum(session[[i]]$feedback_type == -1))
+}
+
+info_frame <- data.frame(name, date, num_brain_areas, num_neuron, trials, successes, failures)
+
+info_frame <- info_frame %>% mutate(ratio_success = successes/trials)
+
+
+# returns tibble containing average spikes by brain area
+brain_spike <- function(num_session, trial){
+  neuron_spikes <- apply(session[[num_session]]$spks[[trial]], MARGIN = 1, FUN = sum)
+  brain_frame <- data.frame(brain = session[[num_session]]$brain_area, spikes = neuron_spikes)
+  avg_spike_brain_area <- brain_frame %>% group_by(brain) %>% summarise(avg_spike = mean(spikes))
+  return(avg_spike_brain_area)
+}
+
+
+# returns df with columns for each brain area measured with contrast, feedback type, stimulus type, and trial num
+create_info_trials <- function(num_session){
+    
+  info_trials <- data.frame()
+  stimulus_type <-c()
+  
+  for(i in 1:length(session[[num_session]]$feedback_type)){
+    
+    info_trials <- rbind(info_trials, brain_spike(num_session, i)$avg_spike)
+    
+    left <- session[[num_session]]$contrast_left[i]
+    right <- session[[num_session]]$contrast_right[i] 
+    stimulus_type <-c(stimulus_type, categorize_feedback(left, right))
+    
+  }
+  
+  info_trials <- info_trials %>% cbind(session[[num_session]]$contrast_left) %>%
+    cbind(session[[num_session]]$contrast_right) %>%
+    cbind(session[[num_session]]$feedback_type) %>%
+    cbind(stimulus_type) %>%
+    cbind(1:length(session[[num_session]]$feedback_type))
+    
+  colnames(info_trials) <- c(brain_spike(num_session, 1)$brain, "contrast_left", 
+                            "contrast_right", "feedback_type", "stimulus_type", "trial_num")
+  return(info_trials)
+}
+
+
+# kable(create_info_trials(4), format = "html", table.attr = "class='table table-striped'",digits=2) 
+
+library(ggformula)
+
+# plots neuron spikes by trial using info_trial
+plot_session <- function(num_session){
+  
+  info_trials <- create_info_trials(num_session)
+  
+  info_trials_long <- info_trials %>%
+    pivot_longer(cols = contains(brain_spike(num_session, 1)$brain), names_to = "Brain_Area", values_to = "y")
+
+  info_trials_plot <- ggplot(info_trials_long) + 
+    geom_line(aes(x = trial_num, y = y, color = Brain_Area)) +
+    geom_spline(aes(x = trial_num, y = y, color = Brain_Area), linewidth = 1) +
+    labs(x = "Trials", y = "Neuron Spikes", title = paste("Neuron spikes by brain area in Session", 
+                                                         num_session, paste0("(", info_frame$name[num_session], ")")))
+
+  print(info_trials_plot)
+}
+
+
+# Function that plots neuron activity in individual trials (Taken from discussion, slightly modified)
+plot_trial <- function(num_session, num_trial){
+  i.t = num_trial
+  this_session = session[[num_session]]
+  n.area = length(unique(session[[num_session]]$brain_area))
+  area.col = rainbow(n=n.area,alpha=0.7)
+  area = c(brain_spike(num_session, num_trial)$brain)
+  
+  spks=this_session$spks[[i.t]];
+  n.neuron=dim(spks)[1]
+  time.points=this_session$time[[i.t]]
+    
+    plot(0,0,xlim=c(min(time.points),max(time.points)),ylim=c(0,n.neuron+1),col='white', xlab='Time (s)',yaxt='n', ylab='Neuron', main=paste('Session', num_session, 'Trial ',i.t, 'feedback', this_session$feedback_type[i.t] ),cex.lab=1.5)
+    for(i in 1:n.neuron){
+        i.a=which(area== this_session$brain_area[i]);
+        col.this=area.col[i.a]
+        
+        ids.spike=which(spks[i,]>0) # find out when there are spikes 
+        if( length(ids.spike)>0 ){
+            points(x=time.points[ids.spike],y=rep(i, length(ids.spike) ),pch='.',cex=2, col=col.this)
+        }
+      
+            
+    }
+    
+legend("topright", 
+  legend = area, 
+  col = area.col, 
+  pch = 16, 
+  cex = 0.8
+  )
+}
+
+
+kable(info_frame, format = "html", table.attr = "class='table table-striped'",digits=2) 
+plot_session(1)
+s <- 16
+par(bg = 'gray',mfrow=c(1,2))
+plot_trial(s,1)
+plot_trial(s,5)
+par(bg = 'gray',mfrow=c(1,2))
+plot_trial(s,9)
+plot_trial(s,10)
+
+ggplot(info_frame, aes(x = name, y = num_brain_areas, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Number of Brain Areas", title = "3a. Number of Brain Areas by Mice")
+
+ggplot(info_frame, aes(x = name, y = num_neuron, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Number of Neurons", title = "3b. Number of Neurons by Mice")
+
+ggplot(info_frame, aes(x = name, y = ratio_success, fill = name)) +
+  geom_boxplot() +
+  labs(x = "Name", y = "Ratio of Success", title = "3c. Success Rate by Mice") 
+
+library(caTools)
+library(rpart)
+
+set.seed(917177178)
+dataset = big_frame[c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm = table(test_set[, 1], y_pred)
+print(cm)
+misclassification_rate <- 1 - sum(diag(cm) / sum(cm))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+dataset = big_frame[c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+set.seed(917177178)
+# Decision Tree Classification
+dataset = data_frames[[2]][c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+plot(classifier1)
+text(classifier1)
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+library(e1071)
+set.seed(917177178)
+
+# Support Vector Machine (SVM) Classification
+dataset = data_frames[[2]][c(1:3,8)]
+dataset$feedback_type = as.factor(dataset$feedback_type)
+
+split = sample.split(dataset$feedback_type, SplitRatio = 0.8)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+
+classifier2 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+print(cm1)
+misclassification_rate2 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f111 <- 2 * precision * recall / (precision + recall)
+
+read_test_data1 = readRDS('./Data/test1.rds')
+read_test_data2 = readRDS('./Data/test2.rds')
+
+avg_spikes_per_trial <- c()
+  for (x in 1:length(read_test_data1$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(read_test_data1$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+
+test_data1 <- data.frame(
+    feedback_type = read_test_data1$feedback_type,
+    contrast_left = read_test_data1$contrast_left,
+    contrast_right = read_test_data1$contrast_right,
+    mouse_name = rep(read_test_data1$mouse_name, length(read_test_data1$feedback_type)),
+    session = rep(1, length(read_test_data1$feedback_type)),
+    num_neurons = rep(length(read_test_data1$brain_area), length(read_test_data1$feedback_type)),
+    brain_areas = rep(length(unique(read_test_data1$brain_area)), length(read_test_data1$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(read_test_data1$feedback_type))
+
+  )
+
+avg_spikes_per_trial <- c()
+  for (x in 1:length(read_test_data2$feedback_type)){
+    avg_spikes_per_trial = c(avg_spikes_per_trial, mean(apply(read_test_data2$spks[[x]], MARGIN = 1, FUN = sum)))
+  }
+
+test_data2 <- data.frame(
+    feedback_type = read_test_data2$feedback_type,
+    contrast_left = read_test_data2$contrast_left,
+    contrast_right = read_test_data2$contrast_right,
+    mouse_name = rep(read_test_data2$mouse_name, length(read_test_data2$feedback_type)),
+    session = rep(18, length(read_test_data2$feedback_type)),
+    num_neurons = rep(length(read_test_data2$brain_area), length(read_test_data2$feedback_type)),
+    brain_areas = rep(length(unique(read_test_data2$brain_area)), length(read_test_data2$feedback_type)),
+    avg_spikes_per_neuron = avg_spikes_per_trial,
+    trail_num_per_session = c(1:length(read_test_data2$feedback_type))
+
+  )
+
+library(gridExtra)
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+test_set = test_data1[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm = table(test_set[, 1], y_pred)
+
+misclassification_rate <- 1 - sum(diag(cm) / sum(cm))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+# Test set 2
+test_set = test_data2[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+
+
+# Test Set 2 but with different training set
+training_set = data_frames[[16]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = feedback_type ~ contrast_left*contrast_right + avg_spikes_per_neuron,
+                 family = "binomial",
+                 data = training_set)
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-1])
+y_pred = ifelse(prob_pred > 0.5, 1, -1)
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm2) / sum(cm2))
+
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f111 <- 2 * precision * recall / (precision + recall)
+
+
+
+grid.arrange(tableGrob(cm), tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 3)
+
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set = test_data1[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Decision Tree Classification
+classifier1 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier1, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate1 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+# Test Set 2
+training_set = data_frames[[16]][c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+
+test_set = test_data2[c(1:3,8)]
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Decision Tree Classification
+classifier2 = rpart(formula = feedback_type ~ .,
+                   data = training_set)
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm2) / sum(cm2))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+
+grid.arrange(tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 2)
+
+
+plot(classifier1)
+text(classifier1)
+plot(classifier2)
+text(classifier2)
+
+
+set.seed(917177178)
+
+training_set = data_frames[[2]][c(1:3,8)]
+test_set = test_data1[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Support Vector Machine (SVM) Classification
+classifier2 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier2, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm1 = table(test_set[, 1], y_pred)
+
+misclassification_rate2 <- 1 - sum(diag(cm1) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f1 <- 2 * precision * recall / (precision + recall)
+
+
+# Test Set 2
+training_set = data_frames[[16]][c(1:3,8)]
+test_set = test_data2[c(1:3,8)]
+training_set$feedback_type = as.factor(training_set$feedback_type)
+test_set$feedback_type = as.factor(test_set$feedback_type)
+
+# Support Vector Machine (SVM) Classification
+classifier3 = svm(formula = feedback_type ~ .,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier3, newdata = test_set[-1], type = 'class')
+
+# Making the Confusion Matrix
+cm2 = table(test_set[, 1], y_pred)
+
+misclassification_rate3 <- 1 - sum(diag(cm2) / sum(cm1))
+
+precision <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(y_pred == 1)
+
+recall <- sum(y_pred == 1 & test_set[, 1] == 1) / sum(test_set[, 1] == 1)
+
+f11 <- 2 * precision * recall / (precision + recall)
+grid.arrange(tableGrob(cm1), tableGrob(cm2),
+             nrow = 1, ncol = 2)
+
+sessionInfo()
+
+
+
+```
+
